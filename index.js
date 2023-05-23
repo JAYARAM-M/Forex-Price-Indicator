@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const sqlite3 = require('sqlite3').verbose();
 const axios = require('axios');
+const fetch = require('node-fetch');
 
 const app = express();
 const apiKey = '5Cdb2b8gGLpPKHrAbcyd6u23cuIUMQV4';
@@ -64,43 +65,51 @@ app.delete('/alerts/:alert_id', (req, res) => {
   });
 });
 
+app.post('/exchange-rates', async (req, res) => {
+  try {
+    const url = 'https://api.apilayer.com/exchangerates_data/latest';
+    const symbols = req.body.symbols;
+    const base = req.body.base;
 
-
-app.post('/exchange-rate', (req, res) => {
-    const { currency_pair } = req.body; // Extract the currency_pair value from the request body
     const requestOptions = {
       method: 'GET',
-      url: 'https://api.apilayer.com/exchangerates_data/latest?symbols=inr&base=USD',
-     
-      headers: {
-        'apikey': apiKey,
-      },
+      headers: { 'apikey': apiKey }
     };
-  
-    axios(requestOptions)
-      .then(response => {
-        const price = response.data?.quotes?.USDINR;
-  
-        if (price === undefined) {
-          res.status(404).json({ message: 'Currency pair not found' });
-          return;
+
+    const response = await fetch(`${url}?symbols=${symbols}&base=${base}`, requestOptions);
+    const result = await response.json();
+
+    if (result.success && result.rates && result.rates[symbols]) {
+      const rate = result.rates[symbols];
+      
+      db.all('SELECT * FROM alerts WHERE currency_pair = ? AND triggered = 0', symbols, function(err, rows) {
+        if (err) {
+          console.error(err);
+          res.sendStatus(500);
+        } else {
+          rows.forEach(row => {
+            if (rate < row.desired_rate) {
+              db.run('UPDATE alerts SET triggered = 1 WHERE id = ?', row.id, function(err) {
+                if (err) {
+                  console.error(err);
+                  res.sendStatus(500);
+                }
+              });
+            }
+          });
+          res.json({ message: 'Price updated successfully' });
         }
-  
-        db.run('UPDATE alerts SET triggered = 1 WHERE currency_pair = ? AND triggered = 0 AND ? >= desired_rate', [currency_pair, price], function(err) {
-          if (err) {
-            console.error(err);
-            res.sendStatus(500);
-          } else {
-            res.json({ message: 'Price updated successfully' });
-          }
-        });
-      })
-      .catch(error => {
-        console.error(error);
-        res.sendStatus(500);
       });
-  });
-  
+    } else {
+      res.status(500).send('Unable to retrieve exchange rate');
+    }
+  } catch (error) {
+    console.log('error', error);
+    res.status(500).send('An error occurred');
+  }
+});
+
+
 
 
 app.listen(3000, () => {
